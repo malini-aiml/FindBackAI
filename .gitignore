@@ -1,0 +1,27 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+
+# Database
+backend/*.db
+
+# Environment variables
+.env
+backend/.env
+frontend/.env
+
+# Node
+frontend/node_modules/
+frontend/.expo/
+
+# Expo
+frontend/dist/
+frontend/web-build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
