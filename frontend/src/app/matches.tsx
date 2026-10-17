@@ -11,6 +11,8 @@ import {
 import { router, useFocusEffect } from "expo-router";
 import { getReports, Report } from "./storage";
 
+const API_URL = "http://127.0.0.1:8000";
+
 type Match = {
   lost: Report;
   found: Report;
@@ -398,11 +400,11 @@ const getDateScore = (
   return 0;
 };
 
-// Calculate complete match score
-const calculateMatchScore = (
+// Calculate complete match score using AI description similarity
+const calculateMatchScore = async (
   lost: Report,
   found: Report
-): number => {
+): Promise<number> => {
   let score = 0;
 
   // 1. Item name: maximum 40
@@ -411,11 +413,50 @@ const calculateMatchScore = (
     found.itemName
   );
 
-  // 2. Description: maximum 30
-  score += getDescriptionScore(
-    lost.description,
-    found.description
-  );
+  // 2. Description: AI semantic similarity
+  try {
+    const response = await fetch(
+      `${API_URL}/ai/text-similarity`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text1: lost.description,
+          text2: found.description,
+        }),
+      }
+    );
+
+    if (response.ok) {
+      const aiResult = await response.json();
+
+      const aiDescriptionScore = Math.min(
+        30,
+        (aiResult.similarity_score / 100) * 30
+      );
+
+      score += aiDescriptionScore;
+    } else {
+      // Fallback to the existing rule-based score
+      score += getDescriptionScore(
+        lost.description,
+        found.description
+      );
+    }
+  } catch (error) {
+    console.log(
+      "AI text similarity unavailable. Using fallback:",
+      error
+    );
+
+    // Fallback to the existing rule-based score
+    score += getDescriptionScore(
+      lost.description,
+      found.description
+    );
+  }
 
   // 3. Location: maximum 20
   score += getLocationScore(
@@ -455,10 +496,10 @@ export default function MatchesScreen() {
 
     const newMatches: Match[] = [];
 
-    lostReports.forEach((lost) => {
-      foundReports.forEach((found) => {
+    for (const lost of lostReports) {
+      for (const found of foundReports) {
         // Calculate similarity score
-        const score = calculateMatchScore(
+        const score = await calculateMatchScore(
           lost,
           found
         );
@@ -476,8 +517,8 @@ export default function MatchesScreen() {
             score,
           });
         }
-      });
-    });
+      }
+    }
 
     // Highest similarity first
     newMatches.sort(
