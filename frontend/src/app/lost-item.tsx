@@ -14,7 +14,11 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { router } from "expo-router";
 
-import { saveReport } from "./storage";
+import { saveReport } from "../lib/storage";
+import { getLoggedInUser } from "../lib/auth-storage";
+
+// Automatic matching
+import { checkForNewMatches } from "./matches";
 
 // FastAPI backend
 const API_URL = "http://127.0.0.1:8000";
@@ -51,20 +55,30 @@ export default function LostItemScreen() {
         return;
       }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.7,
-      });
+      const result =
+        await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          allowsEditing: true,
+          aspect: [4, 3],
+          quality: 0.7,
+        });
 
-      if (!result.canceled && result.assets.length > 0) {
+      if (
+        !result.canceled &&
+        result.assets.length > 0
+      ) {
         setImage(result.assets[0].uri);
         setMessage("");
       }
     } catch (error) {
-      console.log("Image picker error:", error);
-      setMessage("Unable to select image.");
+      console.log(
+        "Image picker error:",
+        error
+      );
+
+      setMessage(
+        "Unable to select image."
+      );
     }
   };
 
@@ -75,32 +89,52 @@ export default function LostItemScreen() {
     try {
       // Web
       if (Platform.OS === "web") {
-        const response = await fetch(uri);
-        const blob = await response.blob();
+        const response =
+          await fetch(uri);
 
-        return await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
+        const blob =
+          await response.blob();
 
-          reader.onloadend = () => {
-            if (typeof reader.result === "string") {
-              resolve(reader.result);
-            } else {
+        return await new Promise<string>(
+          (resolve, reject) => {
+            const reader =
+              new FileReader();
+
+            reader.onloadend = () => {
+              if (
+                typeof reader.result ===
+                "string"
+              ) {
+                resolve(
+                  reader.result
+                );
+              } else {
+                reject(
+                  new Error(
+                    "Could not convert image to Data URL"
+                  )
+                );
+              }
+            };
+
+            reader.onerror = () => {
               reject(
-                new Error("Could not convert image to Data URL")
+                new Error(
+                  "Could not read image"
+                )
               );
-            }
-          };
+            };
 
-          reader.onerror = () => {
-            reject(new Error("Could not read image"));
-          };
-
-          reader.readAsDataURL(blob);
-        });
+            reader.readAsDataURL(
+              blob
+            );
+          }
+        );
       }
 
       // Android / iOS
-      const fileName = `lost_${Date.now()}.jpg`;
+      const fileName =
+        `lost_${Date.now()}.jpg`;
 
       const directory =
         FileSystem.documentDirectory ||
@@ -110,7 +144,8 @@ export default function LostItemScreen() {
         return uri;
       }
 
-      const destination = `${directory}${fileName}`;
+      const destination =
+        `${directory}${fileName}`;
 
       await FileSystem.copyAsync({
         from: uri,
@@ -133,52 +168,90 @@ export default function LostItemScreen() {
   const handleSubmit = async () => {
     setMessage("");
 
-    // Validation
+    // ================================================
+    // CHECK LOGIN
+    // ================================================
+
+    const loggedInUser =
+      await getLoggedInUser();
+
+    if (!loggedInUser) {
+      setMessage(
+        "Please login before submitting a lost item report."
+      );
+      return;
+    }
+
+    // ================================================
+    // VALIDATION
+    // ================================================
+
     if (!itemName.trim()) {
-      setMessage("Please enter the item name.");
+      setMessage(
+        "Please enter the item name."
+      );
       return;
     }
 
     if (!description.trim()) {
-      setMessage("Please enter the item description.");
+      setMessage(
+        "Please enter the item description."
+      );
       return;
     }
 
     if (!location.trim()) {
-      setMessage("Please enter the location.");
+      setMessage(
+        "Please enter the location."
+      );
       return;
     }
 
     if (!date.trim()) {
-      setMessage("Please enter the date.");
+      setMessage(
+        "Please enter the date."
+      );
       return;
     }
 
     if (!time.trim()) {
-      setMessage("Please enter the time.");
+      setMessage(
+        "Please enter the time."
+      );
       return;
     }
 
     if (!image) {
-      setMessage("Please select an image.");
+      setMessage(
+        "Please select an image."
+      );
       return;
     }
 
-    if (!question1.trim() || !answer1.trim()) {
+    if (
+      !question1.trim() ||
+      !answer1.trim()
+    ) {
       setMessage(
         "Please complete verification question 1."
       );
       return;
     }
 
-    if (!question2.trim() || !answer2.trim()) {
+    if (
+      !question2.trim() ||
+      !answer2.trim()
+    ) {
       setMessage(
         "Please complete verification question 2."
       );
       return;
     }
 
-    if (!question3.trim() || !answer3.trim()) {
+    if (
+      !question3.trim() ||
+      !answer3.trim()
+    ) {
       setMessage(
         "Please complete verification question 3."
       );
@@ -187,67 +260,162 @@ export default function LostItemScreen() {
 
     try {
       setIsSaving(true);
-      setMessage("Saving lost item report...");
 
-      // Save image permanently
+      setMessage(
+        "Saving lost item report..."
+      );
+
+      // ================================================
+      // SAVE IMAGE
+      // ================================================
+
       const permanentImageUri =
-        await saveImagePermanently(image);
+        await saveImagePermanently(
+          image
+        );
 
-      // Create local report
+      // ================================================
+      // CREATE LOCAL REPORT
+      // ================================================
+
       const newReport = {
         id: `lost_${Date.now()}`,
+
+        // Logged-in user information
+        userId:
+          loggedInUser.id,
+
+        uploadedBy:
+          loggedInUser.name,
+
         type: "lost" as const,
-        itemName: itemName.trim(),
-        description: description.trim(),
-        location: location.trim(),
-        date: date.trim(),
-        time: time.trim(),
-        image: permanentImageUri,
+
+        itemName:
+          itemName.trim(),
+
+        description:
+          description.trim(),
+
+        location:
+          location.trim(),
+
+        date:
+          date.trim(),
+
+        time:
+          time.trim(),
+
+        image:
+          permanentImageUri,
 
         verificationQuestions: [
           {
-            question: question1.trim(),
-            answer: answer1.trim(),
+            question:
+              question1.trim(),
+
+            answer:
+              answer1.trim(),
           },
+
           {
-            question: question2.trim(),
-            answer: answer2.trim(),
+            question:
+              question2.trim(),
+
+            answer:
+              answer2.trim(),
           },
+
           {
-            question: question3.trim(),
-            answer: answer3.trim(),
+            question:
+              question3.trim(),
+
+            answer:
+              answer3.trim(),
           },
         ],
 
-        status: "Searching" as const,
-        createdAt: new Date().toISOString(),
+        status:
+          "Searching" as const,
+
+        createdAt:
+          new Date().toISOString(),
       };
 
-      // Save locally
-      await saveReport(newReport);
+      // ================================================
+      // SAVE LOCALLY
+      // ================================================
 
-      // Send report to FastAPI backend
-      const backendResponse = await fetch(
-        `${API_URL}/items`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-          },
-
-          body: JSON.stringify({
-            type: "lost",
-            item_name: itemName.trim(),
-            description: description.trim(),
-            location: location.trim(),
-            date: date.trim(),
-            time: time.trim(),
-            image: permanentImageUri,
-            status: "Searching",
-          }),
-        }
+      await saveReport(
+        newReport
       );
+
+      // ================================================
+      // AUTOMATIC MATCHING
+      // ================================================
+      //
+      // IMPORTANT:
+      // This runs immediately after saving.
+      // User does NOT need to open Matches.
+      //
+      // It checks this new lost report against
+      // other users' found reports and creates
+      // notifications when a valid match exists.
+      // ================================================
+
+      await checkForNewMatches(
+        newReport
+      );
+
+      // ================================================
+      // SEND TO FASTAPI BACKEND
+      // ================================================
+
+      const backendResponse =
+        await fetch(
+          `${API_URL}/items`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              // IMPORTANT:
+              // Send logged-in user's ID
+              user_id:
+                loggedInUser.id,
+
+              type: "lost",
+
+              item_name:
+                itemName.trim(),
+
+              description:
+                description.trim(),
+
+              location:
+                location.trim(),
+
+              date:
+                date.trim(),
+
+              time:
+                time.trim(),
+
+              image:
+                permanentImageUri,
+
+              status:
+                "Searching",
+            }),
+          }
+        );
+
+      // ================================================
+      // HANDLE BACKEND ERROR
+      // ================================================
 
       if (!backendResponse.ok) {
         throw new Error(
@@ -263,11 +431,18 @@ export default function LostItemScreen() {
         backendData
       );
 
+      // ================================================
+      // SUCCESS
+      // ================================================
+
       setMessage(
         `Lost item report saved successfully for "${itemName.trim()}".`
       );
 
-      // Clear form
+      // ================================================
+      // CLEAR FORM
+      // ================================================
+
       setItemName("");
       setDescription("");
       setLocation("");
@@ -277,12 +452,17 @@ export default function LostItemScreen() {
 
       setQuestion1("");
       setAnswer1("");
+
       setQuestion2("");
       setAnswer2("");
+
       setQuestion3("");
       setAnswer3("");
     } catch (error) {
-      console.log("Submit error:", error);
+      console.log(
+        "Submit error:",
+        error
+      );
 
       setMessage(
         "Report was saved locally, but could not connect to the backend."
@@ -293,26 +473,40 @@ export default function LostItemScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={
+          styles.container
+        }
         keyboardShouldPersistTaps="handled"
       >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.replace("/")}
+            onPress={() =>
+              router.replace("/")
+            }
           >
-            <Text style={styles.backText}>←</Text>
+            <Text
+              style={styles.backText}
+            >
+              ←
+            </Text>
           </TouchableOpacity>
 
           <View>
-            <Text style={styles.title}>
+            <Text
+              style={styles.title}
+            >
               Report Lost Item
             </Text>
 
-            <Text style={styles.subtitle}>
+            <Text
+              style={styles.subtitle}
+            >
               Help FindBack AI find your lost item
             </Text>
           </View>
@@ -329,7 +523,9 @@ export default function LostItemScreen() {
             placeholder="Example: Black Backpack"
             placeholderTextColor="#94A3B8"
             value={itemName}
-            onChangeText={setItemName}
+            onChangeText={
+              setItemName
+            }
           />
         </View>
 
@@ -347,7 +543,9 @@ export default function LostItemScreen() {
             placeholder="Describe the item in detail..."
             placeholderTextColor="#94A3B8"
             value={description}
-            onChangeText={setDescription}
+            onChangeText={
+              setDescription
+            }
             multiline
             numberOfLines={5}
             textAlignVertical="top"
@@ -361,14 +559,24 @@ export default function LostItemScreen() {
           </Text>
 
           <TouchableOpacity
-            style={styles.imageButton}
+            style={
+              styles.imageButton
+            }
             onPress={pickImage}
           >
-            <Text style={styles.imageButtonIcon}>
+            <Text
+              style={
+                styles.imageButtonIcon
+              }
+            >
               📷
             </Text>
 
-            <Text style={styles.imageButtonText}>
+            <Text
+              style={
+                styles.imageButtonText
+              }
+            >
               {image
                 ? "Change Photo"
                 : "Select Photo"}
@@ -377,11 +585,17 @@ export default function LostItemScreen() {
 
           {image && (
             <View
-              style={styles.imagePreviewContainer}
+              style={
+                styles.imagePreviewContainer
+              }
             >
               <Image
-                source={{ uri: image }}
-                style={styles.imagePreview}
+                source={{
+                  uri: image,
+                }}
+                style={
+                  styles.imagePreview
+                }
                 resizeMode="cover"
               />
             </View>
@@ -399,7 +613,9 @@ export default function LostItemScreen() {
             placeholder="Example: Computer Lab 1"
             placeholderTextColor="#94A3B8"
             value={location}
-            onChangeText={setLocation}
+            onChangeText={
+              setLocation
+            }
           />
         </View>
 
@@ -434,21 +650,39 @@ export default function LostItemScreen() {
         </View>
 
         {/* Verification */}
-        <View style={styles.verificationCard}>
-          <Text style={styles.verificationTitle}>
+        <View
+          style={
+            styles.verificationCard
+          }
+        >
+          <Text
+            style={
+              styles.verificationTitle
+            }
+          >
             🔐 Private Verification Questions
           </Text>
 
           <Text
-            style={styles.verificationDescription}
+            style={
+              styles.verificationDescription
+            }
           >
             These answers are private and can help
             verify ownership later.
           </Text>
 
           {/* Question 1 */}
-          <View style={styles.questionBlock}>
-            <Text style={styles.questionLabel}>
+          <View
+            style={
+              styles.questionBlock
+            }
+          >
+            <Text
+              style={
+                styles.questionLabel
+              }
+            >
               Question 1 *
             </Text>
 
@@ -457,7 +691,9 @@ export default function LostItemScreen() {
               placeholder="Example: What color is the keychain?"
               placeholderTextColor="#94A3B8"
               value={question1}
-              onChangeText={setQuestion1}
+              onChangeText={
+                setQuestion1
+              }
             />
 
             <TextInput
@@ -465,14 +701,24 @@ export default function LostItemScreen() {
               placeholder="Answer"
               placeholderTextColor="#94A3B8"
               value={answer1}
-              onChangeText={setAnswer1}
+              onChangeText={
+                setAnswer1
+              }
               secureTextEntry
             />
           </View>
 
           {/* Question 2 */}
-          <View style={styles.questionBlock}>
-            <Text style={styles.questionLabel}>
+          <View
+            style={
+              styles.questionBlock
+            }
+          >
+            <Text
+              style={
+                styles.questionLabel
+              }
+            >
               Question 2 *
             </Text>
 
@@ -481,7 +727,9 @@ export default function LostItemScreen() {
               placeholder="Example: What is inside the bag?"
               placeholderTextColor="#94A3B8"
               value={question2}
-              onChangeText={setQuestion2}
+              onChangeText={
+                setQuestion2
+              }
             />
 
             <TextInput
@@ -489,14 +737,24 @@ export default function LostItemScreen() {
               placeholder="Answer"
               placeholderTextColor="#94A3B8"
               value={answer2}
-              onChangeText={setAnswer2}
+              onChangeText={
+                setAnswer2
+              }
               secureTextEntry
             />
           </View>
 
           {/* Question 3 */}
-          <View style={styles.questionBlock}>
-            <Text style={styles.questionLabel}>
+          <View
+            style={
+              styles.questionBlock
+            }
+          >
+            <Text
+              style={
+                styles.questionLabel
+              }
+            >
               Question 3 *
             </Text>
 
@@ -505,7 +763,9 @@ export default function LostItemScreen() {
               placeholder="Example: What sticker is on it?"
               placeholderTextColor="#94A3B8"
               value={question3}
-              onChangeText={setQuestion3}
+              onChangeText={
+                setQuestion3
+              }
             />
 
             <TextInput
@@ -513,7 +773,9 @@ export default function LostItemScreen() {
               placeholder="Answer"
               placeholderTextColor="#94A3B8"
               value={answer3}
-              onChangeText={setAnswer3}
+              onChangeText={
+                setAnswer3
+              }
               secureTextEntry
             />
           </View>
@@ -521,8 +783,16 @@ export default function LostItemScreen() {
 
         {/* Message */}
         {message !== "" && (
-          <View style={styles.messageBox}>
-            <Text style={styles.messageText}>
+          <View
+            style={
+              styles.messageBox
+            }
+          >
+            <Text
+              style={
+                styles.messageText
+              }
+            >
               {message}
             </Text>
           </View>
@@ -538,7 +808,11 @@ export default function LostItemScreen() {
           onPress={handleSubmit}
           disabled={isSaving}
         >
-          <Text style={styles.submitButtonText}>
+          <Text
+            style={
+              styles.submitButtonText
+            }
+          >
             {isSaving
               ? "Saving..."
               : "Submit Lost Item"}
@@ -546,7 +820,9 @@ export default function LostItemScreen() {
         </TouchableOpacity>
 
         {/* Bottom note */}
-        <Text style={styles.bottomNote}>
+        <Text
+          style={styles.bottomNote}
+        >
           FindBack AI will compare your report with
           found-item reports.
         </Text>

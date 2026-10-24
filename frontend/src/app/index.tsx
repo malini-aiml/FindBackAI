@@ -1,5 +1,5 @@
-import { router } from "expo-router";
-import React from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   SafeAreaView,
   View,
@@ -9,15 +9,131 @@ import {
   ScrollView,
 } from "react-native";
 
+import {
+  getLoggedInUser,
+  LoggedInUser,
+} from "../lib/auth-storage";
+
+import {
+  getNotifications,
+} from "../lib/notification-storage";
+
 export default function HomeScreen() {
+  const [user, setUser] = useState<LoggedInUser | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Check login status and notifications whenever Home becomes active
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      const loadHomeData = async () => {
+        try {
+          const savedUser = await getLoggedInUser();
+
+          if (!active) {
+            return;
+          }
+
+          setUser(savedUser);
+
+          if (savedUser) {
+            const notifications =
+              await getNotifications();
+
+            const unread =
+              notifications.filter(
+                (notification) =>
+                  Number(notification.userId) ===
+                    Number(savedUser.id) &&
+                  !notification.read
+              ).length;
+
+            if (active) {
+              setUnreadCount(unread);
+            }
+          } else {
+            setUnreadCount(0);
+          }
+        } catch (error) {
+          console.error(
+            "Error loading Home data:",
+            error
+          );
+        }
+      };
+
+      loadHomeData();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
-        
+
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.logo}>FindBack</Text>
-          <Text style={styles.ai}>AI</Text>
+          <View style={styles.logoContainer}>
+            <Text style={styles.logo}>FindBack</Text>
+            <Text style={styles.ai}>AI</Text>
+          </View>
+
+          {/* Header Actions */}
+          <View style={styles.headerActions}>
+
+            {/* Notifications */}
+            {user && (
+              <TouchableOpacity
+                style={styles.notificationButton}
+                onPress={() =>
+                  router.push("/notifications")
+                }
+              >
+                <Text style={styles.notificationIcon}>
+                  🔔
+                </Text>
+
+                {unreadCount > 0 && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>
+                      {unreadCount > 9
+                        ? "9+"
+                        : unreadCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {/* Login / Logged-in User */}
+            {user ? (
+              <TouchableOpacity
+                style={styles.userButton}
+                onPress={() =>
+                  router.push("/profile")
+                }
+              >
+                <Text style={styles.userButtonText}>
+                  {user.name}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.loginButton}
+                onPress={() =>
+                  router.push("/login")
+                }
+              >
+                <Text style={styles.loginButtonText}>
+                  Login
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* Welcome */}
@@ -33,10 +149,14 @@ export default function HomeScreen() {
 
         {/* Lost Item */}
         <TouchableOpacity
-  style={styles.primaryButton}
-  onPress={() => router.push("/lost-item")}
->
-          <Text style={styles.buttonIcon}>🔍</Text>
+          style={styles.primaryButton}
+          onPress={() =>
+            router.push("/lost-item")
+          }
+        >
+          <Text style={styles.buttonIcon}>
+            🔍
+          </Text>
 
           <View>
             <Text style={styles.buttonTitle}>
@@ -51,10 +171,14 @@ export default function HomeScreen() {
 
         {/* Found Item */}
         <TouchableOpacity
-  style={styles.secondaryButton}
-  onPress={() => router.push("/found-item")}
->
-          <Text style={styles.buttonIcon}>📦</Text>
+          style={styles.secondaryButton}
+          onPress={() =>
+            router.push("/found-item")
+          }
+        >
+          <Text style={styles.buttonIcon}>
+            📦
+          </Text>
 
           <View>
             <Text style={styles.buttonTitleDark}>
@@ -73,22 +197,38 @@ export default function HomeScreen() {
         </Text>
 
         <View style={styles.quickRow}>
-          
-          <TouchableOpacity
-  style={styles.quickCard}
-  onPress={() => router.push("/my-reports")}
->
-  <Text>📋</Text>
-  <Text>My Reports</Text>
-</TouchableOpacity>
 
+          {/* My Reports */}
           <TouchableOpacity
-  style={styles.quickCard}
-  onPress={() => router.push("/matches")}
->
-  <Text>🔍</Text>
-  <Text>Matches</Text>
-</TouchableOpacity>
+            style={styles.quickCard}
+            onPress={() =>
+              router.push("/my-reports")
+            }
+          >
+            <Text style={styles.quickIcon}>
+              📋
+            </Text>
+
+            <Text style={styles.quickText}>
+              My Reports
+            </Text>
+          </TouchableOpacity>
+
+          {/* Matches */}
+          <TouchableOpacity
+            style={styles.quickCard}
+            onPress={() =>
+              router.push("/matches")
+            }
+          >
+            <Text style={styles.quickIcon}>
+              🔍
+            </Text>
+
+            <Text style={styles.quickText}>
+              Matches
+            </Text>
+          </TouchableOpacity>
 
         </View>
 
@@ -124,7 +264,13 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     marginTop: 10,
+  },
+
+  logoContainer: {
+    flexDirection: "row",
+    alignItems: "center",
   },
 
   logo: {
@@ -138,6 +284,78 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#2563EB",
     marginLeft: 4,
+  },
+
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  notificationButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D9E1EC",
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+
+  notificationIcon: {
+    fontSize: 22,
+  },
+
+  badge: {
+    position: "absolute",
+    top: -5,
+    right: -5,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 5,
+    borderRadius: 10,
+    backgroundColor: "#EF4444",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  badgeText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+
+  /* Login button */
+  loginButton: {
+    backgroundColor: "#2563EB",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+
+  loginButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+
+  /* Logged-in user button */
+  userButton: {
+    backgroundColor: "#EAF2FF",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#2563EB",
+    maxWidth: 160,
+  },
+
+  userButtonText: {
+    color: "#2563EB",
+    fontSize: 14,
+    fontWeight: "700",
   },
 
   welcomeSection: {

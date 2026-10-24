@@ -15,7 +15,10 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { router } from "expo-router";
-import { saveReport } from "./storage";
+
+import { saveReport } from "../lib/storage";
+import { getLoggedInUser } from "../lib/auth-storage";
+import { checkForNewMatches } from "./matches";
 
 const API_URL = "http://127.0.0.1:8000";
 
@@ -27,33 +30,39 @@ export default function FoundItemScreen() {
   const [time, setTime] = useState("");
   const [message, setMessage] = useState("");
   const [image, setImage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // ==================================================
   // PICK IMAGE
   // ==================================================
 
   const pickImage = async () => {
-    const permissionResult =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      const permissionResult =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!permissionResult.granted) {
-      setMessage(
-        "⚠️ Please allow photo access to select an item photo."
-      );
-      return;
-    }
+      if (!permissionResult.granted) {
+        setMessage(
+          "⚠️ Please allow photo access to select an item photo."
+        );
+        return;
+      }
 
-    const result =
-      await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
-      });
+      const result =
+        await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          allowsEditing: true,
+          aspect: [4, 3],
+          quality: 0.8,
+        });
 
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
-      setMessage("");
+      if (!result.canceled && result.assets.length > 0) {
+        setImage(result.assets[0].uri);
+        setMessage("");
+      }
+    } catch (error) {
+      console.log("Image picker error:", error);
+      setMessage("Unable to select image.");
     }
   };
 
@@ -72,51 +81,66 @@ export default function FoundItemScreen() {
   const saveImagePermanently = async (
     uri: string
   ): Promise<string> => {
+    try {
+      // WEB
+      if (Platform.OS === "web") {
+        const response = await fetch(uri);
+        const blob = await response.blob();
 
-    // WEB
-    if (Platform.OS === "web") {
-      const response = await fetch(uri);
-      const blob = await response.blob();
+        return await new Promise<string>(
+          (resolve, reject) => {
+            const reader = new FileReader();
 
-      return await new Promise<string>(
-        (resolve, reject) => {
-          const reader = new FileReader();
+            reader.onloadend = () => {
+              if (typeof reader.result === "string") {
+                resolve(reader.result);
+              } else {
+                reject(
+                  new Error("Unable to convert image.")
+                );
+              }
+            };
 
-          reader.onloadend = () => {
-            if (typeof reader.result === "string") {
-              resolve(reader.result);
-            } else {
+            reader.onerror = () => {
               reject(
-                new Error("Unable to convert image.")
+                new Error(
+                  "Unable to read selected image."
+                )
               );
-            }
-          };
+            };
 
-          reader.onerror = () => {
-            reject(
-              new Error(
-                "Unable to read selected image."
-              )
-            );
-          };
+            reader.readAsDataURL(blob);
+          }
+        );
+      }
 
-          reader.readAsDataURL(blob);
-        }
+      // ANDROID / iOS
+      const fileName = `found_${Date.now()}.jpg`;
+
+      const directory =
+        FileSystem.documentDirectory ||
+        FileSystem.cacheDirectory;
+
+      if (!directory) {
+        return uri;
+      }
+
+      const permanentUri = `${directory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: uri,
+        to: permanentUri,
+      });
+
+      return permanentUri;
+    } catch (error) {
+      console.log(
+        "Permanent image save error:",
+        error
       );
+
+      return uri;
     }
-
-    // ANDROID / iOS
-    const fileName = `found_${Date.now()}.jpg`;
-
-    const permanentUri =
-      `${FileSystem.documentDirectory}${fileName}`;
-
-    await FileSystem.copyAsync({
-      from: uri,
-      to: permanentUri,
-    });
-
-    return permanentUri;
   };
 
   // ==================================================
@@ -124,8 +148,25 @@ export default function FoundItemScreen() {
   // ==================================================
 
   const handleSubmit = async () => {
+    setMessage("");
 
-    // Validate details
+    // ==================================================
+    // CHECK LOGIN
+    // ==================================================
+
+    const loggedInUser = await getLoggedInUser();
+
+    if (!loggedInUser) {
+      setMessage(
+        "⚠️ Please login before submitting a found item report."
+      );
+      return;
+    }
+
+    // ==================================================
+    // VALIDATE DETAILS
+    // ==================================================
+
     if (
       itemName.trim() === "" ||
       description.trim() === "" ||
@@ -139,7 +180,10 @@ export default function FoundItemScreen() {
       return;
     }
 
-    // Validate image
+    // ==================================================
+    // VALIDATE IMAGE
+    // ==================================================
+
     if (!image) {
       setMessage(
         "⚠️ Please add a photo of the found item."
@@ -148,6 +192,9 @@ export default function FoundItemScreen() {
     }
 
     try {
+      setIsSaving(true);
+
+      setMessage("Saving found item report...");
 
       // ==================================================
       // SAVE IMAGE
@@ -161,7 +208,11 @@ export default function FoundItemScreen() {
       // ==================================================
 
       const newReport = {
-        id: Date.now().toString(),
+        id: `found_${Date.now()}`,
+
+        // Logged-in user information
+        userId: loggedInUser.id,
+        uploadedBy: loggedInUser.name,
 
         type: "found" as const,
 
@@ -189,6 +240,12 @@ export default function FoundItemScreen() {
       await saveReport(newReport);
 
       // ==================================================
+      // CHECK FOR AUTOMATIC MATCHES
+      // ==================================================
+
+      await checkForNewMatches(newReport);
+
+      // ==================================================
       // SEND TO FASTAPI BACKEND
       // ==================================================
 
@@ -202,6 +259,10 @@ export default function FoundItemScreen() {
           },
 
           body: JSON.stringify({
+            // IMPORTANT:
+            // Send logged-in user's ID
+            user_id: loggedInUser.id,
+
             type: "found",
 
             item_name: itemName.trim(),
@@ -244,7 +305,7 @@ export default function FoundItemScreen() {
       // ==================================================
 
       setMessage(
-        `✅ Found item report saved successfully for "${itemName}".`
+        `✅ Found item report saved successfully for "${itemName.trim()}".`
       );
 
       // ==================================================
@@ -257,9 +318,7 @@ export default function FoundItemScreen() {
       setDate("");
       setTime("");
       setImage(null);
-
     } catch (error) {
-
       console.log(
         "Error saving found item:",
         error
@@ -268,6 +327,8 @@ export default function FoundItemScreen() {
       setMessage(
         "⚠️ Report was saved locally, but could not connect to the backend."
       );
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -277,12 +338,10 @@ export default function FoundItemScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-
         {/* Back Button */}
 
         <TouchableOpacity
@@ -384,7 +443,6 @@ export default function FoundItemScreen() {
         </Text>
 
         {!image ? (
-
           <TouchableOpacity
             style={styles.photoButton}
             onPress={pickImage}
@@ -393,11 +451,8 @@ export default function FoundItemScreen() {
               📷 Add Item Photo
             </Text>
           </TouchableOpacity>
-
         ) : (
-
           <View style={styles.imageContainer}>
-
             <Image
               source={{ uri: image }}
               style={styles.previewImage}
@@ -405,7 +460,6 @@ export default function FoundItemScreen() {
             />
 
             <View style={styles.imageActions}>
-
               <TouchableOpacity
                 style={styles.changeButton}
                 onPress={pickImage}
@@ -423,20 +477,25 @@ export default function FoundItemScreen() {
                   ❌ Remove
                 </Text>
               </TouchableOpacity>
-
             </View>
-
           </View>
         )}
 
         {/* Submit */}
 
         <TouchableOpacity
-          style={styles.submitButton}
+          style={[
+            styles.submitButton,
+            isSaving &&
+              styles.submitButtonDisabled,
+          ]}
           onPress={handleSubmit}
+          disabled={isSaving}
         >
           <Text style={styles.submitText}>
-            Report Found Item
+            {isSaving
+              ? "Saving..."
+              : "Report Found Item"}
           </Text>
         </TouchableOpacity>
 
@@ -449,9 +508,7 @@ export default function FoundItemScreen() {
             </Text>
           </View>
         )}
-
       </ScrollView>
-
     </SafeAreaView>
   );
 }
@@ -461,7 +518,6 @@ export default function FoundItemScreen() {
 // ==================================================
 
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
     backgroundColor: "#F7F9FC",
@@ -588,6 +644,10 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
 
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+
   submitText: {
     color: "#FFFFFF",
     fontSize: 16,
@@ -607,5 +667,4 @@ const styles = StyleSheet.create({
     color: "#172B4D",
     textAlign: "center",
   },
-
 });
